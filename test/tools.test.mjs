@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildFeishuTools, registerFeishuTools } from '../lib/tools.js'
+import { buildFeishuTools, hostAnchorCandidates, loadHostDefineTool, registerFeishuTools } from '../lib/tools.js'
 
 /** 假的 defineTool：真正的宿主包在测试环境不一定可解析，这里只验证我们声明的形状 */
 const fakeDefine = (definition) => definition
@@ -189,4 +189,56 @@ test('宿主没有 tools 服务时静默降级（返回 0，不抛）', () => {
   assert.equal(count, 0)
   assert.equal(warnings.length, 1)
   assert.match(warnings[0], /tools/)
+})
+
+test('hostAnchorCandidates：环境变量优先，其后是桌面版 macOS / Windows·Linux 布局', () => {
+  const list = hostAnchorCandidates({ env: { DSH_INSTALL_DIR: '/opt/dsh' }, execPath: '/Apps/DSH.app/Contents/MacOS/DSH' })
+  assert.equal(list[0], '/opt/dsh')
+  assert.equal(list[1], '/Apps/DSH.app/Contents/Resources/app.asar/dsh/node_modules/@deepseek-ai/dsh')
+  assert.equal(list[2], '/Apps/DSH.app/Contents/MacOS/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh')
+  assert.equal(hostAnchorCandidates({ env: {}, execPath: '/x/dsh' }).length, 2)
+})
+
+test('loadHostDefineTool：能按包名直接解析时不走兜底', async () => {
+  const seen = []
+  const define = await loadHostDefineTool({
+    env: {},
+    execPath: '/x/dsh',
+    importModule: async (specifier) => {
+      seen.push(specifier)
+      return { defineTool: fakeDefine }
+    },
+    resolveFrom: () => assert.fail('不应走兜底解析'),
+  })
+  assert.equal(define, fakeDefine)
+  assert.deepEqual(seen, ['@deepseek-ai/dsh-tools'])
+})
+
+test('loadHostDefineTool：本地链接安装解析不到包名时，从宿主安装目录兜底', async () => {
+  const resolved = []
+  const define = await loadHostDefineTool({
+    env: { DSH_INSTALL_DIR: '/missing' },
+    execPath: '/Apps/DSH.app/Contents/MacOS/DSH',
+    importModule: async (specifier) => {
+      if (specifier === '@deepseek-ai/dsh-tools') throw new Error('ERR_MODULE_NOT_FOUND')
+      return { defineTool: fakeDefine }
+    },
+    resolveFrom: (anchor) => {
+      resolved.push(anchor)
+      if (anchor === '/missing') throw new Error('not found')
+      return anchor + '/node_modules/@deepseek-ai/dsh-tools/lib/index.js'
+    },
+  })
+  assert.equal(define, fakeDefine)
+  assert.equal(resolved.length, 2)
+})
+
+test('loadHostDefineTool：全部失败时返回 undefined（工具不注册，桥接照常）', async () => {
+  const define = await loadHostDefineTool({
+    env: {},
+    execPath: '/x/dsh',
+    importModule: async () => { throw new Error('nope') },
+    resolveFrom: () => { throw new Error('nope') },
+  })
+  assert.equal(define, undefined)
 })
