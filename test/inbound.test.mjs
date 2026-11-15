@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   conversationKey,
   extractItemText,
+  extractResources,
   extractText,
   flattenPost,
   normalizeEvent,
@@ -76,11 +77,11 @@ test('群聊 @ 机器人后取正文并去掉占位符', () => {
   assert.equal(result.text, '帮我看看构建日志')
 })
 
-test('非文本消息返回 unsupported 并带上类型', () => {
-  const raw = textEvent({ message: { message_type: 'image', content: '{}' } })
+test('不支持的消息类型返回 unsupported 并带上类型', () => {
+  const raw = textEvent({ message: { message_type: 'sticker', content: JSON.stringify({ file_key: 'f' }) } })
   const result = normalizeEvent(raw, {})
-  assert.equal(result.reason, 'unsupported-image')
-  assert.equal(result.messageType, 'image')
+  assert.equal(result.reason, 'unsupported-sticker')
+  assert.equal(result.messageType, 'sticker')
   assert.equal(result.chatId, 'oc_1')
 })
 
@@ -181,9 +182,19 @@ test('富文本同一段落内的多个片段直接拼接', () => {
   assert.equal(normalizeEvent(raw, {}).text, '看这个链接文档')
 })
 
-test('富文本只有图片时返回 unsupported-post-empty', () => {
+test('富文本只有图片时作为带资源的消息投递', () => {
   const raw = postEvent({
     message: { content: JSON.stringify({ content: [[{ tag: 'img', image_key: 'img_x' }]] }) },
+  })
+  const result = normalizeEvent(raw, {})
+  assert.equal(result.kind, 'message')
+  assert.equal(result.text, '')
+  assert.deepEqual(result.resources, [{ kind: 'image', key: 'img_x', downloadType: 'image' }])
+})
+
+test('富文本既没有文字也没有图片时返回 unsupported-post-empty', () => {
+  const raw = postEvent({
+    message: { content: JSON.stringify({ content: [[{ tag: 'emotion', emoji_type: 'SMILE' }]] }) },
   })
   const result = normalizeEvent(raw, {})
   assert.equal(result.reason, 'unsupported-post-empty')
@@ -239,4 +250,43 @@ test('extractItemText 兼容 msg_type + body.content 形态', () => {
     text: '',
   })
   assert.deepEqual(extractItemText(undefined), { messageType: '', text: '' })
+})
+
+test('图片 / 文件 / 语音 / 视频消息登记资源 key，正文为空', () => {
+  const cases = [
+    ['image', { image_key: 'img_1' }, [{ kind: 'image', key: 'img_1', downloadType: 'image' }]],
+    ['file', { file_key: 'file_1', file_name: '报告.pdf' }, [{ kind: 'file', key: 'file_1', downloadType: 'file', name: '报告.pdf' }]],
+    ['audio', { file_key: 'file_a', duration: 3200 }, [{ kind: 'audio', key: 'file_a', downloadType: 'file', durationMs: 3200 }]],
+    ['media', { file_key: 'file_v', image_key: 'img_v', file_name: 'clip.mp4' }, [{ kind: 'file', key: 'file_v', downloadType: 'file', name: 'clip.mp4' }]],
+  ]
+  for (const [type, content, expected] of cases) {
+    const result = normalizeEvent(textEvent({ message: { message_type: type, content: JSON.stringify(content) } }), {})
+    assert.equal(result.kind, 'message', type)
+    assert.equal(result.text, '', type)
+    assert.equal(result.messageType, type)
+    assert.deepEqual(result.resources, expected, type)
+  }
+})
+
+test('纯文字消息的 resources 为空数组', () => {
+  assert.deepEqual(normalizeEvent(textEvent(), {}).resources, [])
+})
+
+test('富文本：文字与内嵌图片同时保留，多语言包里重复的图片只算一次', () => {
+  const post = {
+    zh_cn: { title: '看图', content: [[{ tag: 'text', text: '这张' }, { tag: 'img', image_key: 'img_2' }], [{ tag: 'media', file_key: 'file_m' }]] },
+    en_us: { content: [[{ tag: 'img', image_key: 'img_2' }]] },
+  }
+  const result = normalizeEvent(postEvent({ message: { content: JSON.stringify(post) } }), {})
+  assert.equal(result.text, '看图\n这张')
+  assert.deepEqual(result.resources, [
+    { kind: 'image', key: 'img_2', downloadType: 'image' },
+    { kind: 'file', key: 'file_m', downloadType: 'file', name: 'video.mp4' },
+  ])
+})
+
+test('资源 content 缺 key 或不是 JSON 时不登记资源', () => {
+  assert.deepEqual(extractResources({ message_type: 'image', content: '{}' }), [])
+  assert.deepEqual(extractResources({ message_type: 'file', content: '{bad' }), [])
+  assert.deepEqual(extractResources(null), [])
 })

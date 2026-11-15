@@ -40,3 +40,11 @@ test('非字符串正文会被转成字符串', () => {
   const message = createUserMessage(42)
   assert.equal(message.content[0].text, '42')
 })
+
+test('附带的图片 / 文件块排在正文后面，且一并冻结', () => {
+  const image = { type: 'image', attachment: { attachmentId: 'a1', mediaType: 'image/png', bytes: 1, width: 1, height: 1 } }
+  const file = { type: 'file', attachment: { attachmentId: 'a2', name: 'a.pdf', bytes: 3 } }
+  const message = createUserMessage('看看', undefined, [image, file])
+  assert.deepEqual(message.content.map((block) => block.type), ['text', 'image', 'file'])
+  assert.ok(Object.isFrozen(message.content[1].attachment))
+})
