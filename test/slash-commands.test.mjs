@@ -2,6 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { syncSlashCommands, autoSyncSlashCommands, SLASH_COMMANDS } from '../lib/slash-commands.js'
 
+/** 按名字取指令，避免测试依赖菜单顺序 */
+const STOP = SLASH_COMMANDS.find((spec) => spec.command === 'stop')
+
 /** 造一个假 API：记录调用，按需返回已注册列表或抛错 */
 function makeApi(remote, options = {}) {
   const calls = []
@@ -77,10 +80,10 @@ test('分页：has_more + page_token 时继续翻页并合并结果', async () =
       if (!path.includes('page_token=')) {
         return { data: { items: [{ command_id: 'a', command: 'new', description: { default_value: SLASH_COMMANDS[0].zh, i18n: { zh_cn: SLASH_COMMANDS[0].zh, en_us: SLASH_COMMANDS[0].en } } }], has_more: true, page_token: 'p2' } }
       }
-      return { data: { items: [{ command_id: 'b', command: 'stop', description: { default_value: SLASH_COMMANDS[1].zh, i18n: { zh_cn: SLASH_COMMANDS[1].zh, en_us: SLASH_COMMANDS[1].en } } }], has_more: false } }
+      return { data: { items: [{ command_id: 'b', command: 'stop', description: { default_value: STOP.zh, i18n: { zh_cn: STOP.zh, en_us: STOP.en } } }], has_more: false } }
     },
   }
-  const result = await syncSlashCommands(api, { commands: SLASH_COMMANDS.slice(0, 2) })
+  const result = await syncSlashCommands(api, { commands: [SLASH_COMMANDS[0], STOP] })
   assert.equal(result.ok, true)
   assert.deepEqual(result.skipped, ['new', 'stop'])
   assert.equal(api.calls.length, 2)
